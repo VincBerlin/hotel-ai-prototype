@@ -17,6 +17,8 @@ const PERSISTENCE_ENABLED = !!process.env.NEXT_PUBLIC_SUPABASE_URL
 
 export async function POST(req: NextRequest) {
   const requestId = crypto.randomUUID()
+  const t0 = performance.now()
+
   let hotelId: string, message: string, history: ChatMessage[], guestContext: { name: string; room?: string; stayNights?: number } | undefined, conversationId: string | undefined
   try {
     const body = await req.json()
@@ -32,16 +34,19 @@ export async function POST(req: NextRequest) {
   }
 
   let hotel, accountId: string
+  const tSupabaseKbStart = performance.now()
   try {
     ;({ knowledge: hotel, accountId } = await loadHotelKnowledgeFromDb(hotelId))
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: 'Hotel not found.', code: 'HOTEL_NOT_FOUND', detail, requestId }, { status: 404 })
   }
+  console.log(`[timing:${requestId}] supabase-kb: ${Math.round(performance.now() - tSupabaseKbStart)}ms`)
 
   // Resolve conversation before the Claude call so we have an ID for message persistence
   let resolvedConversationId: string | null = null
   if (PERSISTENCE_ENABLED) {
+    const tConvStart = performance.now()
     try {
       resolvedConversationId = await getOrCreateConversation({
         conversationId: conversationId ?? null,
@@ -55,6 +60,7 @@ export async function POST(req: NextRequest) {
       console.error(`[chat/route] Conversation create failed (${requestId}):`, err)
       // Non-fatal — continue without persistence
     }
+    console.log(`[timing:${requestId}] supabase-conv: ${Math.round(performance.now() - tConvStart)}ms`)
   }
 
   // HotelConfig still used for context/escalation — DB migration in a subsequent step
@@ -69,6 +75,7 @@ export async function POST(req: NextRequest) {
 
   let rawText: string
   let tokensUsed: number | null = null
+  const tClaudeStart = performance.now()
   try {
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
@@ -87,13 +94,16 @@ export async function POST(req: NextRequest) {
     console.error(`[chat/route] Anthropic error (${requestId}):`, detail)
     return NextResponse.json({ error: 'AI service error.', code: 'AI_SERVICE_ERROR', detail, requestId }, { status: 502 })
   }
+  console.log(`[timing:${requestId}] claude-api: ${Math.round(performance.now() - tClaudeStart)}ms`)
 
   if (!rawText) {
     return NextResponse.json({ error: 'Empty response from AI.', code: 'EMPTY_AI_RESPONSE', requestId }, { status: 502 })
   }
 
+  const tPostStart = performance.now()
   const { cleanText, metadata } = postProcess(rawText)
   const proactiveMessage = getProactiveMessage(hotelConfig, context, false)
+  console.log(`[timing:${requestId}] post-process: ${Math.round(performance.now() - tPostStart)}ms`)
 
   const escalationLevelMap: Record<string, number> = { none: 0, low: 1, high: 2, critical: 3 }
   const modelEscalationLevel = escalationLevelMap[metadata.escalation] ?? 0
@@ -119,6 +129,8 @@ export async function POST(req: NextRequest) {
       updateConversation({ conversationId: cid, escalationLevel, language }),
     ])
   }
+
+  console.log(`[timing:${requestId}] total: ${Math.round(performance.now() - t0)}ms`)
 
   return NextResponse.json({
     reply,

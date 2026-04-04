@@ -1,5 +1,159 @@
 import type { HotelConfig, HotelKnowledge } from './types'
 
+type DbDocument = { category: string; title: string; content: string }
+type DbKnowledgeBase = { tone: string | null; language: string | null; agent_name: string | null }
+
+function parseJson<T>(raw: string): T | null {
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    return null
+  }
+}
+
+export function fromDbDocuments(
+  accountName: string,
+  kb: DbKnowledgeBase,
+  docs: DbDocument[]
+): HotelKnowledge {
+  const grouped = new Map<string, DbDocument[]>()
+  for (const doc of docs) {
+    const group = grouped.get(doc.category) ?? []
+    group.push(doc)
+    grouped.set(doc.category, group)
+  }
+
+  const one = (cat: string): DbDocument | null => grouped.get(cat)?.[0] ?? null
+  const many = (cat: string): DbDocument[] => grouped.get(cat) ?? []
+
+  const locationDoc = one('location')
+  const locationData = locationDoc
+    ? parseJson<{ address?: string; city?: string; country?: string; gpsLink?: string }>(locationDoc.content)
+    : null
+
+  const checkinDoc = one('checkin')
+  const checkinData = checkinDoc
+    ? parseJson<{ from?: string; until?: string; process?: string; earlyCheckin?: string; lateCheckout?: string; luggageStorage?: string }>(checkinDoc.content)
+    : null
+
+  const wifiDoc = one('wifi')
+  const wifiData = wifiDoc
+    ? parseJson<{ network?: string; password?: string }>(wifiDoc.content)
+    : null
+
+  const breakfastDoc = one('breakfast')
+  const breakfastData = breakfastDoc
+    ? parseJson<{ available?: boolean; included?: boolean; hours?: string; location?: string; details?: string }>(breakfastDoc.content)
+    : null
+
+  const parkingDoc = one('parking')
+  const parkingData = parkingDoc
+    ? parseJson<{ available?: boolean; free?: boolean; details?: string }>(parkingDoc.content)
+    : null
+
+  const transportDoc = one('transport')
+  const transportData = transportDoc
+    ? parseJson<{ fromAirport?: string; publicTransport?: string; taxi?: string }>(transportDoc.content)
+    : null
+
+  const policiesDoc = one('policies')
+  const policiesData = policiesDoc
+    ? parseJson<{ cancellation?: string; houseRules?: string; payment?: string[]; pets?: string; smoking?: string }>(policiesDoc.content)
+    : null
+
+  const contactDoc = one('contact')
+  const contactData = contactDoc
+    ? parseJson<{ email?: string; phone?: string }>(contactDoc.content)
+    : null
+
+  const faq = many('faq').map(d => ({ question: d.title, answer: d.content }))
+
+  const restaurantDocs = [...many('dining'), ...many('restaurants')]
+  const restaurants = restaurantDocs.map(d => {
+    const data = parseJson<{ cuisine?: string; distance?: string; highlight?: string }>(d.content)
+    return {
+      name: d.title,
+      cuisine: data?.cuisine ?? 'Local',
+      distance: data?.distance ?? 'On-site',
+      highlight: data?.highlight ?? d.content,
+    }
+  })
+
+  const attractions = many('attractions').map(d => {
+    const data = parseJson<{ distance?: string; description?: string }>(d.content)
+    return {
+      name: d.title,
+      distance: data?.distance ?? 'Nearby',
+      description: data?.description ?? d.content,
+    }
+  })
+
+  const amenities = [...many('facilities'), ...many('amenities')].map(
+    d => `${d.title}: ${d.content}`
+  )
+
+  return {
+    name: accountName,
+    agentName: kb.agent_name ?? undefined,
+    tone: (kb.tone as 'formal' | 'warm' | 'casual' | null) ?? 'warm',
+    location: {
+      address: locationData?.address ?? locationData?.city ?? '',
+      city: locationData?.city ?? '',
+      country: locationData?.country ?? '',
+      gpsLink: locationData?.gpsLink,
+    },
+    checkin: {
+      from: checkinData?.from ?? '',
+      until: checkinData?.until ?? '',
+      process: checkinData?.process,
+      earlyCheckin: checkinData?.earlyCheckin,
+      lateCheckout: checkinData?.lateCheckout,
+      luggageStorage: checkinData?.luggageStorage,
+    },
+    wifi: {
+      network: wifiData?.network ?? '',
+      password: wifiData?.password ?? '',
+    },
+    breakfast: breakfastDoc
+      ? {
+          available: breakfastData?.available ?? false,
+          included: breakfastData?.included ?? false,
+          hours: breakfastData?.hours ?? '',
+          location: breakfastData?.location ?? '',
+          details: breakfastData?.details,
+        }
+      : undefined,
+    parking: parkingDoc
+      ? {
+          available: parkingData?.available ?? false,
+          free: parkingData?.free ?? false,
+          details: parkingData?.details ?? '',
+        }
+      : undefined,
+    transport: transportData?.fromAirport
+      ? { fromAirport: transportData.fromAirport, publicTransport: transportData.publicTransport, taxi: transportData.taxi }
+      : transportDoc
+        ? { fromAirport: transportDoc.content }
+        : undefined,
+    policies: policiesDoc
+      ? {
+          cancellation: policiesData?.cancellation ?? '',
+          houseRules: policiesData?.houseRules ?? '',
+          payment: policiesData?.payment ?? [],
+          pets: policiesData?.pets,
+          smoking: policiesData?.smoking,
+        }
+      : undefined,
+    faq: faq.length > 0 ? faq : undefined,
+    restaurants: restaurants.length > 0 ? restaurants : undefined,
+    attractions: attractions.length > 0 ? attractions : undefined,
+    amenities: amenities.length > 0 ? amenities : undefined,
+    escalation: contactDoc
+      ? { email: contactData?.email ?? '', phone: contactData?.phone ?? '' }
+      : undefined,
+  }
+}
+
 export function toHotelKnowledge(hotel: HotelConfig): HotelKnowledge {
   // On-site dining as restaurants
   const diningRestaurants = hotel.dining.map((d) => ({

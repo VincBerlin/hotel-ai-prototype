@@ -14,6 +14,7 @@ export type ChatRequestBody = {
   message: string
   history: ChatMessage[]
   guestContext?: GuestContext
+  conversationId?: string
 }
 
 export class ChatApiError extends Error {
@@ -95,10 +96,21 @@ export function parseChatRequestBody(body: unknown): ChatRequestBody {
     guestContext = candidate.guestContext
   }
 
+  let conversationId: string | undefined
+  if (candidate.conversationId !== undefined) {
+    if (typeof candidate.conversationId !== 'string' || candidate.conversationId.trim().length === 0) {
+      throw new ChatApiError(400, 'INVALID_FIELD', 'conversationId must be a non-empty string.', {
+        field: 'conversationId',
+      })
+    }
+    conversationId = candidate.conversationId.trim()
+  }
+
   return {
     hotelId,
     message,
     history,
     guestContext,
+    conversationId,
   }
 }

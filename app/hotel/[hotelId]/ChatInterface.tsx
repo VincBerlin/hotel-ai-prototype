@@ -27,6 +27,7 @@ export default function ChatInterface({ hotelId, hotelName, guestName, roomNumbe
   ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [conversationId, setConversationId] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -58,6 +59,7 @@ export default function ChatInterface({ hotelId, hotelName, guestName, roomNumbe
           message: text,
           history,
           guestContext: guestName && roomNumber ? { name: guestName, room: roomNumber } : undefined,
+          conversationId: conversationId ?? undefined,
         }),
       })
 
@@ -69,6 +71,9 @@ export default function ChatInterface({ hotelId, hotelName, guestName, roomNumbe
         throw new Error(`${errorCode}${requestId}.${detail}`.trim())
       }
 
+      if (data.conversationId && !conversationId) {
+        setConversationId(data.conversationId)
+      }
       setMessages((prev) => [
         ...prev,
         {
